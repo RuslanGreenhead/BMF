@@ -67,6 +67,8 @@ class BinarizedEmbedding(nn.Embedding):
 def shifted_sigmoid(x):
     return torch.sigmoid(x - 1)
 
+def shifted_scaled_tanh(x, coef):             # maybe coef=5 as default
+    return 0.5 * (torch.tanh(coef * (x - 1)) + 1)
 
 # ----------------------------------------------- Specific Architectures ----------------------------------------------- #
 
@@ -137,7 +139,7 @@ class NeuralBMF_1(nn.Module):
 
         user_vectors = self.sigm(self.user_linear_1(self.user_embedding(users)))    # -> (b_size, emb_dim)
         user_vectors = self.tanh(self.user_linear_2(user_vectors))                  # -> (b_size, emb_dim)
-        item_vectors = self.sigm(self.item_linear_1(self.item_embedding(users)))    # -> (b_size, emb_dim)
+        item_vectors = self.sigm(self.item_linear_1(self.item_embedding(items)))    # -> (b_size, emb_dim)
         item_vectors = self.tanh(self.item_linear_2(item_vectors))                  # -> (b_size, emb_dim)
 
         # print("user_vectors:", user_vectors)
@@ -197,7 +199,7 @@ class NeuralBMF_large(nn.Module):
 
         user_vectors = self.sigm(self.user_linear_1(self.user_embedding(users)))    # -> (b_size, emb_dim)
         user_vectors = (binarized(self.user_linear_2(user_vectors)) + 1) / 2        # -> (b_size, emb_dim)
-        item_vectors = self.sigm(self.item_linear_1(self.item_embedding(users)))    # -> (b_size, emb_dim)
+        item_vectors = self.sigm(self.item_linear_1(self.item_embedding(items)))    # -> (b_size, emb_dim)
         item_vectors = (binarized(self.item_linear_2(item_vectors)) + 1) / 2        # -> (b_size, emb_dim)
 
         if self.output_act == "shifted_sigmoid":

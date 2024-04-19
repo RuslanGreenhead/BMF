@@ -8,6 +8,16 @@ from typing import Tuple
 def get_binary_tensor(size: Tuple, dtype=torch.int8, seed=None):
     return torch.randint(0, 2, size, dtype=dtype)
 
+# Binary patterned matrix creator
+def get_pattern_matrix(size: Tuple, rows=[], cols=[], dtype=torch.int8):
+    res = torch.zeros(*size)
+    for r in rows:
+        res[r, :] = torch.ones(size[1])
+    for c in cols:
+        res[:, c] = torch.ones(size[0])
+
+    return res
+
 
 # Boolean matrix multiplication #1
 def bin_matmul_1(A: np.array, B: np.array):
