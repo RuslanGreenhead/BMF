@@ -48,3 +48,92 @@ def matrix_to_ids(m: torch.Tensor):
             res[m.shape[1] * i + j] = torch.tensor([i, j, m[i, j]], dtype=torch.int64)
 
     return res
+
+
+
+# ----------------------------------------------- Data loading + processing ---------------------------------------------- #
+
+# ------------------------------------------------------- MOVIELENS ------------------------------------------------------ #
+
+def generate_dataset(path, variant="20m", outputpath="."):
+    """Generates a hdf5 movielens datasetfile from the raw datafiles found at:
+    https://grouplens.org/datasets/movielens/20m/
+
+    You shouldn't have to run this yourself, and can instead just download the
+    output using the 'get_movielens' function./
+    """
+    filename = os.path.join(outputpath, f"movielens_{variant}.hdf5")
+
+    if variant == "20m":
+        ratings, movies = _read_dataframes_20M(path)
+    elif variant == "100k":
+        ratings, movies = _read_dataframes_100k(path)
+    else:
+        ratings, movies = _read_dataframes(path)
+
+    _hfd5_from_dataframe(ratings, movies, filename)
+
+
+def _read_dataframes_20M(path):
+    """reads in the movielens 20M"""
+    import pandas
+
+    ratings = pandas.read_csv(os.path.join(path, "ratings.csv"))
+    movies = pandas.read_csv(os.path.join(path, "movies.csv"))
+
+    return ratings, movies
+
+
+def _read_dataframes_100k(path):
+    """reads in the movielens 100k dataset"""
+    import pandas
+
+    ratings = pandas.read_table(
+        os.path.join(path, "u.data"), names=["userId", "movieId", "rating", "timestamp"]
+    )
+
+    movies = pandas.read_csv(
+        os.path.join(path, "u.item"),
+        names=["movieId", "title"],
+        usecols=[0, 1],
+        delimiter="|",
+        encoding="ISO-8859-1",
+    )
+
+    return ratings, movies
+
+
+def _read_dataframes(path):
+    import pandas
+
+    ratings = pandas.read_csv(
+        os.path.join(path, "ratings.dat"),
+        delimiter="::",
+        names=["userId", "movieId", "rating", "timestamp"],
+    )
+
+    movies = pandas.read_table(
+        os.path.join(path, "movies.dat"), delimiter="::", names=["movieId", "title", "genres"]
+    )
+    return ratings, movies
+
+
+def _hfd5_from_dataframe(ratings, movies, outputfilename):
+    # transform ratings dataframe into a sparse matrix
+    m = coo_matrix(
+        (ratings["rating"].astype(np.float32), (ratings["movieId"], ratings["userId"]))
+    ).tocsr()
+
+    with h5py.File(outputfilename, "w") as f:
+        # write out the ratings matrix
+        g = f.create_group("movie_user_ratings")
+        g.create_dataset("data", data=m.data)
+        g.create_dataset("indptr", data=m.indptr)
+        g.create_dataset("indices", data=m.indices)
+
+        # write out the titles as a numpy array
+        titles = np.empty(shape=(movies.movieId.max() + 1,), dtype=np.object)
+        titles[movies.movieId] = movies.title
+        dt = h5py.special_dtype(vlen=str)
+        dset = f.create_dataset("movie", (len(titles),), dtype=dt)
+        dset[:] = titles
