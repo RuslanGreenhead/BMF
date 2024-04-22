@@ -7,7 +7,7 @@ from torch.autograd.function  import Function, InplaceFunction
 import numpy as np
 from typing import Tuple
 
-from .binary_modules import SignActivation, shifted_sigmoid, shifted_scaled_tanh
+import bmf.neural.binary_modules as bm
 
 # ----------------------------------------------- Specific Architectures ----------------------------------------------- #
 

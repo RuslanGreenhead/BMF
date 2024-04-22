@@ -5,9 +5,11 @@ from torch.autograd import Variable
 from torch.autograd.function  import Function, InplaceFunction
 
 import numpy as np
-from typing import Tuple
+from typing import Tuple, Dict, Any, List
+from abc import ABCMeta, abstractmethod
+from functools import partial
 
-# ------------------------------------------------- Level 1 tools ------------------------------------------------- # 
+# ---------------------------------------------------- Basic tools ---------------------------------------------------- # 
 
 class Binarize(InplaceFunction):
     def forward(ctx, input, quant_mode='det', allow_scale=False, inplace=False):
@@ -41,7 +43,7 @@ class BinarizedLinear(nn.Linear):
 
     def forward(self, input):
 
-        if input.size(1) != 784:      # to fix
+        if input.size(1) != 784:      # for ResNet case
             input_b=binarized(input)
         weight_b=binarized(self.weight)
         out = nn.functional.linear(input_b,weight_b)
@@ -67,12 +69,55 @@ class BinarizedEmbedding(nn.Embedding):
 def shifted_sigmoid(x):
     return torch.sigmoid(x - 1)
 
-def shifted_scaled_tanh(x, coef):             # maybe coef=5 as default
+def shifted_scaled_tanh(x, coef):                   
     return 0.5 * (torch.tanh(coef * (x - 1)) + 1)
 
 
 
-# ------------------------------------------------- Level 2 tools ------------------------------------------------- #
+# ---------------------------------------------------- Advanced tools ---------------------------------------------------- #
+
+def _with_args(cls_or_self: Any, **kwargs: Dict[str, Any]) -> Any:
+    r'''Wrapper that allows creation of class factories.
+    This can be useful when there is a need to create classes with the same
+    constructor arguments, but different instances.
+    Source: https://github.com/pytorch/pytorch/blob/b02c932fb67717cb26d6258908541b670faa4e72/torch/quantization/observer.py
+    Example::
+        >>> Foo.with_args = classmethod(_with_args)
+        >>> foo_builder = Foo.with_args(a=3, b=4).with_args(answer=42)
+        >>> foo_instance1 = foo_builder()
+        >>> foo_instance2 = foo_builder()
+        >>> id(foo_instance1) == id(foo_instance2)
+        False
+    '''
+
+    class _PartialWrapper(object):
+        def __init__(self, p):
+            self.p = p
+
+        def __call__(self, *args, **keywords):
+            return self.p(*args, **keywords)
+
+        def __repr__(self):
+            return self.p.__repr__()
+
+        with_args = _with_args
+    r = _PartialWrapper(partial(cls_or_self, **kwargs))
+    return r
+
+
+ABC = ABCMeta(str("ABC"), (object,), {})
+
+
+class BinarizerBase(ABC, nn.Module):
+    def __init__(self) -> None:
+        super(BinarizerBase, self).__init__()
+
+    @abstractmethod
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pass
+
+    with_args = classmethod(_with_args)
+
 
 class SignActivation(Function):
     r'''Applies the sign function element-wise
@@ -90,12 +135,12 @@ class SignActivation(Function):
     @staticmethod
     def forward(ctx, input: torch.Tensor) -> torch.Tensor:
         ctx.save_for_backward(input)
-        # return input.sign()
+        return input.sign()
 
-        x = torch.tanh(input * 3)       # some alternative way  -> in this case we have to DELETE 
-        with torch.no_grad():           # the following backward
-            x = torch.sign(x)
-        return x
+        # x = torch.tanh(input * 3)       # some alternative way  -> in this case we have to DELETE 
+        # with torch.no_grad():           # the following backward
+        #     x = torch.sign(x)
+        # return x
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
@@ -123,3 +168,59 @@ class SignActivationStochastic(SignActivation):
         ctx.save_for_backward(input)
         noise = torch.rand_like(input).sub_(0.5)
         return input.add_(1).div_(2).add_(noise).clamp_(0, 1).round_().mul_(2).sub_(1)
+
+
+class TanhBinaryActivation(Function):
+    r'''Advanced binarization'''
+
+    @staticmethod
+    def forward(ctx, input: torch.Tensor, k, t) -> torch.Tensor:
+        ctx.save_for_backward(input, k, t)
+
+        return input.sign()
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
+        input, k, t = ctx.saved_tensors
+        grad_input = k * t * (1 - torch.pow(torch.tanh(t * input), 2)) * grad_output  # using derivative of tanh
+
+        return grad_input, None, None
+        
+
+
+class BasicInputBinarizer(BinarizerBase):
+    r'''pplies the sign function element-wise.
+    nn.Module version of SignActivation.
+    '''
+
+    def __init__(self):
+        super(BasicInputBinarizer, self).__init__()
+
+    def forward(self, x: torch.Tensor) -> None:
+        return SignActivation.apply(x)
+
+
+class StochasticInputBinarizer(BinarizerBase):
+    r'''Applies the sign function element-wise.
+    nn.Module version of SignActivation.
+    '''
+
+    def __init__(self):
+        super(StochasticInputBinarizer, self).__init__()
+
+    def forward(self, x: torch.Tensor):
+        return SignActivationStochastic.apply(x)
+
+
+class TanhInputBinarizer(BinarizerBase):
+    r'''Applies STE with scaled tanh under the hood.
+    nn.Module version of TanhBinaryActivation.
+    '''
+
+    def __init__(self, k, t):
+        super(TanhInputBinarizer, self).__init__()
+        self.k = torch.tensor([k]).float()
+        self.t = torch.tensor([t]).float()
+
+    def forward(self, x: torch.Tensor):
+        return TanhBinaryActivation.apply(x, self.k, self.t)

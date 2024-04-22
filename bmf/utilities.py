@@ -10,11 +10,11 @@ def get_binary_tensor(size: Tuple, dtype=torch.int8, seed=None):
 
 # Binary patterned matrix creator
 def get_pattern_matrix(size: Tuple, rows=[], cols=[], dtype=torch.int8):
-    res = torch.zeros(*size)
+    res = torch.zeros(*size, dtype=dtype)
     for r in rows:
-        res[r, :] = torch.ones(size[1])
+        res[r, :] = torch.ones(size[1], dtype=dtype)
     for c in cols:
-        res[:, c] = torch.ones(size[0])
+        res[:, c] = torch.ones(size[0], dtype=dtype)
 
     return res
 
