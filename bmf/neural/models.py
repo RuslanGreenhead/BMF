@@ -11,7 +11,7 @@ import bmf.neural.binary_modules as bm
 
 # ----------------------------------------------- Specific Architectures ----------------------------------------------- #
 
-class NeuralBMF(nn.Module):
+class NBMF_1(nn.Module):
     def __init__(self, n_users: int, n_items: int, embedding_dim: int) -> None:
         super().__init__()
         self.user_embedding_b = bm.BinarizedEmbedding(n_users, embedding_dim)
@@ -55,7 +55,7 @@ class NeuralBMF(nn.Module):
         nn.init.xavier_uniform_(self.item_embedding_b.weight)
 
 
-class NeuralBMF_1(nn.Module):
+class NBMF_2(nn.Module):
     def __init__(self, n_users: int, n_items: int, embedding_dim: int) -> None:
         super().__init__()
         self.user_embedding = nn.Embedding(n_users, embedding_dim)
@@ -111,8 +111,9 @@ class NeuralBMF_1(nn.Module):
 
 
 
-# ----------------------------------------------- General Architectures ----------------------------------------------- #
-class NeuralBMF_large(nn.Module):
+# ----------------------------------------------- Generalized Architectures ----------------------------------------------- #
+
+class NBMFLarge(nn.Module):
     def __init__(self, n_users: int, n_items: int, embedding_dim: int,
                  hidden_dim: int, output_act: str, init_weights: bool, **kwargs) -> None:
         super().__init__()
@@ -125,30 +126,37 @@ class NeuralBMF_large(nn.Module):
         self.item_linear_2 = nn.Linear(hidden_dim, embedding_dim)
 
         self.sigm = nn.Sigmoid()
-        self.pooling = nn.MaxPool1d(kernel_size=embedding_dim)
-        self.output_act = output_act
-        self.kwargs = kwargs
+        self.relu = nn.ReLU()
+        self.binarizer = bm.TanhInputBinarizer(1, 1)
+
+        if output_act == "shifted_sigmoid":
+            self.output_act = lambda prod: bm.shifted_sigmoid(torch.sum(prod, axis=1)) 
+        elif output_act == "shifted_tanh":
+            self.output_act = lambda prod: bm.shifted_scaled_tanh(torch.sum(prod, axis=1), coef=kwargs["tanh_coef"])
+        elif output_act == "maxpool":
+            self.pooling = nn.MaxPool1d(kernel_size=embedding_dim)
+            self.output_act = lambda prod: self.pooling(prod).squeeze(1)
+        elif output_act == "dense_layer":
+            self.dense_1 = nn.Linear(hidden_dim, 16)
+            self.dense_2 = nn.Linear(16, 1)
+            self.output_act = lambda prod: self.sigm(self.dense_2(self.sigm(self.dense_1(prod)))).squeeze(1)
         
         if init_weights: self._init_weight()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x -> (batch_size, 3)
+        # x -> (b_size, 3)
         users = x[:, 0]    # -> (b_size)
         items = x[:, 1]    # -> (b_size)
 
-        user_vectors = self.sigm(self.user_linear_1(self.user_embedding(users)))    # -> (b_size, emb_dim)
-        user_vectors = (binarized(self.user_linear_2(user_vectors)) + 1) / 2        # -> (b_size, emb_dim)
-        item_vectors = self.sigm(self.item_linear_1(self.item_embedding(items)))    # -> (b_size, emb_dim)
-        item_vectors = (binarized(self.item_linear_2(item_vectors)) + 1) / 2        # -> (b_size, emb_dim)
-
-        if self.output_act == "shifted_sigmoid":
-            res = torch.sum(torch.mul(user_vectors, item_vectors), axis=1)             # -> (b_size)
-            res = bm.shifted_sigmoid(res)
-        elif self.output_act == "tanh":
-            res = torch.sum(torch.mul(user_vectors, item_vectors), axis=1)             # -> (b_size)
-            res = torch.tanh(self.kwargs["tanh_coef"] * res)
-        elif self.output_act == "maxpool":
-            res = self.pooling(torch.mul(user_vectors, item_vectors)).squeeze(1)       # -> (b_size)
+        user_vectors = self.relu((self.user_linear_1(self.sigm(self.user_embedding(users)))))     # -> (b_size, emb_dim)
+        user_vectors = self.sigm(self.binarizer(self.user_linear_2(user_vectors)))       # -> (b_size, emb_dim)
+        # user_vectors = torch.tanh(self.user_linear_2(user_vectors))
+        item_vectors = self.relu((self.item_linear_1(self.sigm(self.item_embedding(items)))))       # -> (b_size, emb_dim)
+        item_vectors = self.sigm(self.binarizer(self.item_linear_2(item_vectors)))        # -> (b_size, emb_dim)
+        # item_vectors = torch.tanh(self.item_linear_2(item_vectors))
+        
+        prod = torch.mul(user_vectors, item_vectors)                                   # -> (b_size)
+        res = self.output_act(prod)                                                    # -> (b_size)
             
         return res
     
@@ -157,9 +165,9 @@ class NeuralBMF_large(nn.Module):
         Extracts current (binary / raw) factor-matrices for users and for items
         '''
         with torch.no_grad():
-            user_raw = self.sigm(self.user_linear_1(self.user_embedding.weight))
+            user_raw = self.relu(self.user_linear_1(self.sigm((self.user_embedding.weight))))
             user_raw = self.user_linear_2(user_raw)
-            item_raw = self.sigm(self.item_linear_1(self.item_embedding.weight))
+            item_raw = self.relu(self.item_linear_1(self.sigm((self.item_embedding.weight))))
             item_raw = self.item_linear_2(item_raw)
 
             if raw:
