@@ -171,7 +171,7 @@ class SignActivationStochastic(SignActivation):
 
 
 class TanhBinaryActivation(Function):
-    r'''Advanced binarization'''
+    r'''STE with scaled tanh under the hood'''
 
     @staticmethod
     def forward(ctx, input: torch.Tensor, k, t) -> torch.Tensor:
@@ -185,8 +185,24 @@ class TanhBinaryActivation(Function):
         grad_input = k * t * (1 - torch.pow(torch.tanh(t * input), 2)) * grad_output  # using derivative of tanh
 
         return grad_input, None, None
-        
 
+
+class SigmoidBinaryActivation(Function):
+    r'''STE with scaled sigmoid under the hood'''
+
+    @staticmethod
+    def forward(ctx, input: torch.Tensor, t) -> torch.Tensor:
+        ctx.save_for_backward(input, t)
+
+        return (input.sign() + 1) / 2
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
+        input, t = ctx.saved_tensors
+        grad_input = t * torch.sigmoid(t * input) * (1 - torch.sigmoid(t * input)) * grad_output  # using derivative of sigmoid
+
+        return grad_input, None, None
+        
 
 class BasicInputBinarizer(BinarizerBase):
     r'''pplies the sign function element-wise.
@@ -224,3 +240,16 @@ class TanhInputBinarizer(BinarizerBase):
 
     def forward(self, x: torch.Tensor):
         return TanhBinaryActivation.apply(x, self.k, self.t)
+
+
+class SigmoidInputBinarizer(BinarizerBase):
+    r'''Applies STE with scaled sigmoid under the hood.
+    nn.Module version of SigmoidBinaryActivation.
+    '''
+
+    def __init__(self, t):
+        super(SigmoidInputBinarizer, self).__init__()
+        self.t = torch.tensor([t]).float()
+
+    def forward(self, x: torch.Tensor):
+        return SigmoidBinaryActivation.apply(x, self.t)
