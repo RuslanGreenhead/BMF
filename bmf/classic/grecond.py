@@ -1,11 +1,11 @@
 import numpy as np
-import pandas as pd
 import copy
 
 
 class GreConD_bin:
-    def __init__(self, I):   #I--boolean matrix n*m: list of lists of int
+    def __init__(self, I, acc_threshold=1.0):   #I--boolean matrix n*m: list of lists of int
         self.I = I
+        self.acc_threshold = acc_threshold    # desired decomposition accuracy
         self.m = len(I[0])
         self.n = len(I)
         self.I_rows = []    # list of integers from binary rows
@@ -21,6 +21,9 @@ class GreConD_bin:
         self.factors = None
         self.M_int=None
         self.ones = (1 << self.m) - 1
+
+        # OPTIMIZATION
+        self.total_ones = sum(bin(r).count('1') for r in self.I_rows)
 
     def derive_up(self, N):   #N -- list of indices from the set {0,...,n-1}
         if N!=[]:
@@ -64,7 +67,11 @@ class GreConD_bin:
 
     def get_concepts(self):    #returns a set of factor concepts of I
         F = []
+        # OPTIMIZATION
+        covered_ones = 0
+
         while all([v == 0 for v in self.U])!=True:
+        # while self._get_curr_acc() < self.acc_threshold:
             D = []
             max_len = 0
             max_len_prev = -1
@@ -84,6 +91,13 @@ class GreConD_bin:
             F.append(max_concept)
             for i in max_concept[0]:
                 self.U[i] = self.U[i] & (~D_int&self.ones)
+
+            # OPTIMIZATION
+            covered_ones += max_len
+            accuracy = 1 - (self.total_ones - covered_ones) / (self.m * self.n)
+            if accuracy >= self.acc_threshold:
+                break
+
         self.concepts = F
         return F
 
@@ -96,6 +110,10 @@ class GreConD_bin:
         A = [[0]*len_c for i in range(self.n)]
         B = [[0]*self.m for i in range(len_c)]
         for k in range(len_c):
+            # if self._get_curr_acc(A, B) >= self.acc_threshold:
+            #     A = [row[:k] for row in A]
+            #     B = B[:k]
+            #     break
             for i in concepts[k][0]:
                 A[i][k]=1
             for j in concepts[k][1]:
@@ -112,3 +130,14 @@ class GreConD_bin:
         B= np.array(A_B[1])
         I = np.where(np.matmul(A,B)>=1, 1, 0)
         return I
+    
+    def _get_accuracy(self, A, B):
+        """
+        Calculate how well does A @ B approximate intrinsic matrix I.
+        """
+
+        AB_np = np.array(A) @ np.array(B)
+        AB_boolprod = np.where(AB_np >=1, 1, 0)
+        I_np = np.array(self.I)
+
+        return (AB_boolprod == I_np).sum() / I_np.size
