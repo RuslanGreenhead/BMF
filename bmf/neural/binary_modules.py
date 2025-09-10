@@ -39,7 +39,7 @@ def binarized(input, quant_mode='det'):
 
 class BinarizedLinear(nn.Linear):
     def __init__(self, *kargs, **kwargs):
-        super(BinarizeLinear, self).__init__(*kargs, **kwargs)
+        super(BinarizedLinear, self).__init__(*kargs, **kwargs)
 
     def forward(self, input):
 
@@ -171,20 +171,32 @@ class SignActivationStochastic(SignActivation):
 
 
 class TanhBinaryActivation(Function):
-    r'''STE with scaled tanh under the hood'''
+    r'''STE with scaled tanh under the hood
+    Forward: sign function for binarization
+    Backward: scaled tanh derivative surrogate gradient
+    '''
 
     @staticmethod
-    def forward(ctx, input: torch.Tensor, k, t) -> torch.Tensor:
+    def forward(ctx, input: torch.Tensor, k, t, noise_std=0.0) -> torch.Tensor:
         ctx.save_for_backward(input, k, t)
+        ctx.noise_std = noise_std
 
         return input.sign()
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
+    def backward(ctx, grad_output: torch.Tensor):
         input, k, t = ctx.saved_tensors
-        grad_input = k * t * (1 - torch.pow(torch.tanh(t * input), 2)) * grad_output  # using derivative of tanh
+        noise_std = ctx.noise_std
+        if noise_std > 0:
+            noise = torch.randn_like(input) * noise_std
+            input = input + noise
 
-        return grad_input, None, None
+
+        k_clamped = torch.clamp(k, 0.1, 10.0)
+        t_clamped = torch.clamp(t, 0.1, 10.0)
+        grad_input = k_clamped * t_clamped * (1 - torch.tanh(t_clamped * input).pow(2)) * grad_output
+
+        return grad_input, None, None, None
 
 
 class SigmoidBinaryActivation(Function):
@@ -205,7 +217,7 @@ class SigmoidBinaryActivation(Function):
         
 
 class BasicInputBinarizer(BinarizerBase):
-    r'''pplies the sign function element-wise.
+    r'''Applies the sign function element-wise.
     nn.Module version of SignActivation.
     '''
 
@@ -228,18 +240,21 @@ class StochasticInputBinarizer(BinarizerBase):
         return SignActivationStochastic.apply(x)
 
 
-class TanhInputBinarizer(BinarizerBase):
+class TanhInputBinarizer(nn.Module):
     r'''Applies STE with scaled tanh under the hood.
     nn.Module version of TanhBinaryActivation.
     '''
 
-    def __init__(self, k, t):
+    def __init__(self, init_k=1.0, init_t=1.0, noise_std=0.0):
         super(TanhInputBinarizer, self).__init__()
-        self.k = torch.tensor([k]).float()
-        self.t = torch.tensor([t]).float()
+        # Make k and t learnable parameters
+        self.k = nn.Parameter(torch.tensor(init_k).float())
+        self.t = nn.Parameter(torch.tensor(init_t).float())
+        self.noise_std = noise_std
 
     def forward(self, x: torch.Tensor):
-        return TanhBinaryActivation.apply(x, self.k, self.t)
+
+        return TanhBinaryActivation.apply(x, self.k, self.t, self.noise_std)
 
 
 class SigmoidInputBinarizer(BinarizerBase):
