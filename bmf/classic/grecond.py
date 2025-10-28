@@ -10,10 +10,12 @@ class GreConD_bin:
         self.n = len(I)
         self.I_rows = []    # list of integers from binary rows
         self.I_cols = []    # list of integers from binary columns
+
         for i in self.I:
             self.I_rows.append(int(''.join(map(str,i)), 2))
         for j in range(self.m):
             self.I_cols.append(int(''.join(map(str,[row[j] for row in I])), 2))
+
         #self.U = np.argwhere(I==1).tolist()
         self.U = copy.deepcopy(self.I_rows)
         self.all_column_indices = list(range(self.m))
@@ -70,14 +72,14 @@ class GreConD_bin:
         # OPTIMIZATION
         covered_ones = 0
 
-        while all([v == 0 for v in self.U])!=True:
+        while all([v == 0 for v in self.U]) != True:
         # while self._get_curr_acc() < self.acc_threshold:
             D = []
             max_len = 0
             max_len_prev = -1
             max_concept = []
             column_indices = self.all_column_indices
-            while column_indices != [] and max_len_prev<max_len:
+            while column_indices != [] and max_len_prev < max_len:
                 max_len_prev = max_len
                 for y in column_indices:
                     D_y = self.add_elem(D, y)
@@ -127,7 +129,7 @@ class GreConD_bin:
         else:
             A_B = self.factors
         A = np.array(A_B[0])
-        B= np.array(A_B[1])
+        B = np.array(A_B[1])
         I = np.where(np.matmul(A,B)>=1, 1, 0)
         return I
     
